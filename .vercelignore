@@ -1,0 +1,8 @@
+.env
+.env.*
+.data/
+.test-data/
+.npm-cache/
+node_modules/
+.git/
+.vercel/

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f5f2" />
+    <meta name="description" content="Aster website overview and database status." />
+    <title>Aster · Admin console</title>
+    <link rel="stylesheet" href="/admin.css" />
+    <script src="/admin.js" defer></script>
+  </head>
+  <body class="admin-page booting">
+    <aside class="admin-sidebar">
+      <a class="admin-brand" href="/"><span class="admin-brand-mark">✳</span><span>aster</span></a>
+      <div class="admin-nav-label">WORKSPACE</div>
+      <a class="admin-nav-item active" href="/admin.html"><span class="nav-grid">▦</span><span>Overview</span></a>
+      <a class="admin-nav-item" href="/" title="Back to conversations"><span class="nav-chat">◌</span><span>Conversations</span></a>
+      <div class="admin-sidebar-bottom"><span class="admin-status-dot"></span><span>Administrator view</span></div>
+    </aside>
+    <main class="admin-main">
+      <header class="admin-topbar"><div class="admin-breadcrumb"><span>Workspace</span><span class="crumb-separator">/</span><strong>Overview</strong></div><div class="admin-top-actions"><a href="/" class="back-to-chat">Back to chat <span>↗</span></a><button id="admin-signout" class="admin-signout" type="button">Sign out</button></div></header>
+      <section class="admin-content">
+        <div class="admin-heading"><div><p class="admin-eyebrow">ASTER · ADMIN</p><h1>Good to see you.</h1><p class="admin-subtitle">A quiet overview of what’s happening across your website.</p></div><div class="date-chip" id="today-label">Website overview</div></div>
+        <div class="database-banner" id="database-banner" role="status"><span class="database-indicator"></span><span id="database-message">Loading database status…</span><a id="database-help" href="/README.md" hidden>Setup guide</a></div>
+        <div class="metric-grid">
+          <article class="metric-card"><div class="metric-topline"><span class="metric-label">ACCOUNTS</span><span class="metric-icon people-icon">◎</span></div><strong class="metric-value" id="metric-users">—</strong><span class="metric-note">Registered accounts</span></article>
+          <article class="metric-card"><div class="metric-topline"><span class="metric-label">CONVERSATIONS</span><span class="metric-icon chat-icon">◌</span></div><strong class="metric-value" id="metric-conversations">—</strong><span class="metric-note">Saved in the workspace</span></article>
+          <article class="metric-card"><div class="metric-topline"><span class="metric-label">MESSAGES</span><span class="metric-icon message-icon">↗</span></div><strong class="metric-value" id="metric-messages">—</strong><span class="metric-note">Across all conversations</span></article>
+          <article class="metric-card"><div class="metric-topline"><span class="metric-label">NEW ACCOUNTS</span><span class="metric-icon new-icon">✳</span></div><strong class="metric-value" id="metric-new-users">—</strong><span class="metric-note">Created in the last 7 days</span></article>
+        </div>
+        <section class="recent-panel">
+          <div class="panel-heading"><div><h2>Recent conversations</h2><p>Latest activity, with account details only.</p></div><span class="panel-live"><span></span>LIVE OVERVIEW</span></div>
+          <div class="table-wrap"><table><thead><tr><th>CONVERSATION</th><th>ACCOUNT</th><th>MESSAGES</th><th>UPDATED</th></tr></thead><tbody id="recent-rows"><tr><td colspan="4" class="table-loading">Loading recent activity…</td></tr></tbody></table></div>
+          <div class="empty-recent" id="empty-recent" hidden><span class="empty-recent-mark">✳</span><strong>No conversations yet</strong><span>Recent chat activity will appear here.</span></div>
+        </section>
+        <footer class="admin-footer"><span>ASTER · PRIVATE ADMIN OVERVIEW</span><span id="admin-footer-note">Data stays in your workspace.</span></footer>
+      </section>
+    </main>
+    <div class="admin-error" id="admin-error" role="alert" hidden></div>
+  </body>
+</html>
