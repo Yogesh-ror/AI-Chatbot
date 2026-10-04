@@ -498,8 +498,11 @@ function validMessages(value) {
 }
 
 async function handleChat(request, response) {
-  if (!process.env.GEMINI_API_KEY) {
-    sendJSON(response, 503, { error: "Add GEMINI_API_KEY to the app’s .env file, then restart the server." });
+  const providers = [];
+  if (process.env.GEMINI_API_KEY?.trim()) providers.push("Gemini");
+  if (process.env.OPENAI_API_KEY?.trim()) providers.push("OpenAI");
+  if (!providers.length) {
+    sendJSON(response, 503, { error: "Configure GEMINI_API_KEY or OPENAI_API_KEY in the app’s .env file, then restart the server." });
     return;
   }
   let body;
@@ -517,60 +520,126 @@ async function handleChat(request, response) {
   }
   const model = allowedModels.has(body.model) ? body.model : "gemini-3.8-flash";
   const responseStyle = styles[body.responseStyle] || styles.balanced;
-  const payload = {
-    system_instruction: {
-      parts: [{ text: `You are Aster, a thoughtful, capable AI assistant. Be useful, honest about uncertainty, and answer the user's actual question. Use Markdown when it improves readability. ${responseStyle}` }],
-    },
-    contents: messages.map((message) => ({
-      role: message.role === "assistant" ? "model" : "user",
-      parts: [{ text: message.content }],
-    })),
+  const instructions = `You are Aster, a thoughtful, capable AI assistant. Be useful, honest about uncertainty, and answer the user's actual question. Use Markdown when it improves readability. ${responseStyle}`;
+  const attempts = [];
+  const controllers = new Map();
+
+  if (process.env.GEMINI_API_KEY?.trim()) {
+    attempts.push({
+      provider: "Gemini",
+      run: async (signal) => {
+        const payload = {
+          system_instruction: { parts: [{ text: instructions }] },
+          contents: messages.map((message) => ({
+            role: message.role === "assistant" ? "model" : "user",
+            parts: [{ text: message.content }],
+          })),
+        };
+        if (body.webSearch === true) payload.tools = [{ google_search: {} }];
+        const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+          method: "POST",
+          headers: { "x-goog-api-key": process.env.GEMINI_API_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal,
+        });
+        const result = await upstream.json().catch(() => ({}));
+        if (!upstream.ok) throw new Error(`Gemini returned ${upstream.status}.`);
+        const candidate = result.candidates?.[0];
+        let text = (candidate?.content?.parts || []).map((part) => part.text || "").join("").trim();
+        const metadata = candidate?.groundingMetadata;
+        const supports = [...(metadata?.groundingSupports || [])].sort((a, b) => (b.segment?.endIndex || 0) - (a.segment?.endIndex || 0));
+        const chunks = metadata?.groundingChunks || [];
+        for (const support of supports) {
+          const endIndex = support.segment?.endIndex;
+          const citations = (support.groundingChunkIndices || []).map((index) => {
+            const uri = chunks[index]?.web?.uri;
+            if (!uri) return null;
+            try {
+              const parsed = new URL(uri);
+              return parsed.protocol === "https:" ? `[${index + 1}](${parsed.href})` : null;
+            } catch { return null; }
+          }).filter(Boolean);
+          if (Number.isInteger(endIndex) && citations.length) text = `${text.slice(0, endIndex)}${citations.join(", ")}${text.slice(endIndex)}`;
+        }
+        if (!text) throw new Error("Gemini returned an empty reply.");
+        return { text, searchSuggestionsHTML: body.webSearch === true ? metadata?.searchEntryPoint?.renderedContent || null : null };
+      },
+    });
+  }
+
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    attempts.push({
+      provider: "OpenAI",
+      run: async (signal) => {
+        const payload = {
+          model: "gpt-4.1-mini",
+          instructions,
+          input: messages.map((message) => ({ role: message.role, content: message.content })),
+          store: false,
+        };
+        if (body.webSearch === true) payload.tools = [{ type: "web_search" }];
+        const upstream = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal,
+        });
+        const result = await upstream.json().catch(() => ({}));
+        if (!upstream.ok) throw new Error(`OpenAI returned ${upstream.status}.`);
+        const outputText = typeof result.output_text === "string" ? result.output_text.trim() : "";
+        const textParts = [];
+        const citations = [];
+        for (const item of result.output || []) {
+          if (item.type !== "message") continue;
+          for (const part of item.content || []) {
+            if (part.type !== "output_text" || typeof part.text !== "string") continue;
+            textParts.push(part.text);
+            for (const annotation of part.annotations || []) {
+              const citation = annotation.url_citation;
+              if (annotation.type !== "url_citation" || !citation?.url) continue;
+              try {
+                const url = new URL(citation.url);
+                if (url.protocol !== "https:") continue;
+                citations.push({ url: url.href, title: String(citation.title || url.hostname).replace(/[\[\]\r\n]/g, " ").trim() });
+              } catch { /* Ignore malformed citation URLs. */ }
+            }
+          }
+        }
+        let text = outputText || textParts.join("\n").trim();
+        if (!text) throw new Error("OpenAI returned an empty reply.");
+        const uniqueCitations = [...new Map(citations.map((citation) => [citation.url, citation])).values()];
+        if (uniqueCitations.length) {
+          text += `\n\nSources:\n${uniqueCitations.map((citation) => `- [${citation.title}](${citation.url.replaceAll(")", "%29")})`).join("\n")}`;
+        }
+        return { text, searchSuggestionsHTML: null };
+      },
+    });
+  }
+
+  for (const attempt of attempts) controllers.set(attempt.provider, new AbortController());
+  const abortProviders = (except = null) => {
+    for (const [provider, controller] of controllers) {
+      if (provider !== except) controller.abort();
+    }
   };
-  if (body.webSearch === true) payload.tools = [{ google_search: {} }];
+  const onClientDisconnect = () => {
+    if (!response.writableEnded) abortProviders();
+  };
+  response.on("close", onClientDisconnect);
 
   try {
-    const upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: {
-        "x-goog-api-key": process.env.GEMINI_API_KEY,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    const result = await upstream.json().catch(() => ({}));
-    if (!upstream.ok) {
-      const message = result?.error?.message || `Gemini returned an error (${upstream.status}).`;
-      sendJSON(response, 502, { error: `Gemini API: ${message}` });
-      return;
-    }
-    const candidate = result.candidates?.[0];
-    let text = (candidate?.content?.parts || []).map((part) => part.text || "").join("").trim();
-    const metadata = candidate?.groundingMetadata;
-    const supports = [...(metadata?.groundingSupports || [])].sort((a, b) => (b.segment?.endIndex || 0) - (a.segment?.endIndex || 0));
-    const chunks = metadata?.groundingChunks || [];
-    for (const support of supports) {
-      const endIndex = support.segment?.endIndex;
-      const citations = (support.groundingChunkIndices || []).map((index) => {
-        const uri = chunks[index]?.web?.uri;
-        if (!uri) return null;
-        try {
-          const parsed = new URL(uri);
-          return parsed.protocol === "https:" ? `[${index + 1}](${parsed.href})` : null;
-        } catch { return null; }
-      }).filter(Boolean);
-      if (Number.isInteger(endIndex) && citations.length) text = `${text.slice(0, endIndex)}${citations.join(", ")}${text.slice(endIndex)}`;
-    }
-    if (!text) {
-      const blocked = result.promptFeedback?.blockReason || candidate?.finishReason;
-      sendJSON(response, 502, { error: blocked ? `Gemini could not answer this request (${blocked}). Try rephrasing it.` : "Gemini returned an empty reply. Please try again." });
-      return;
-    }
-    sendJSON(response, 200, {
-      text,
-      searchSuggestionsHTML: body.webSearch === true ? metadata?.searchEntryPoint?.renderedContent || null : null,
-    });
-  } catch (error) {
-    sendJSON(response, 502, { error: `Could not reach the Gemini API: ${error.message}` });
+    const winner = await Promise.any(attempts.map(async (attempt) => ({
+      provider: attempt.provider,
+      result: await attempt.run(controllers.get(attempt.provider).signal),
+    })));
+    abortProviders(winner.provider);
+    if (!response.destroyed) sendJSON(response, 200, { ...winner.result, provider: winner.provider });
+  } catch {
+    const providersTried = attempts.map((attempt) => attempt.provider).join(" and ");
+    if (!response.destroyed) sendJSON(response, 502, { error: `${providersTried} could not answer this request. Check the API keys, account quota, or try again shortly.` });
+  } finally {
+    response.removeListener("close", onClientDisconnect);
+    abortProviders();
   }
 }
 
@@ -641,11 +710,15 @@ export async function handleRequest(request, response) {
       return;
     }
     if (url.pathname === "/api/config" && request.method === "GET") {
+      const geminiConfigured = Boolean(process.env.GEMINI_API_KEY?.trim());
+      const openaiConfigured = Boolean(process.env.OPENAI_API_KEY?.trim());
       sendJSON(response, 200, {
-        geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+        geminiConfigured,
+        openaiConfigured,
+        aiReady: geminiConfigured || openaiConfigured,
         sessionConfigured: Boolean(getSessionSecret()),
         defaultModel: "gemini-3.8-flash",
-        provider: "Gemini",
+        provider: "OpenAI and Gemini race",
         database: await databaseStatus(),
       });
       return;
@@ -680,7 +753,8 @@ if (!process.env.VERCEL) {
   const host = "127.0.0.1";
   server.listen(port, host, () => {
     console.log(`Aster is ready at http://${host}:${port}`);
-    console.log(process.env.GEMINI_API_KEY ? "Gemini API key detected." : "Gemini API key is not configured.");
+    const configuredProviders = [process.env.OPENAI_API_KEY?.trim() && "OpenAI", process.env.GEMINI_API_KEY?.trim() && "Gemini"].filter(Boolean);
+    console.log(configuredProviders.length ? `AI providers configured: ${configuredProviders.join(" and ")}.` : "No AI provider keys are configured.");
     console.log(mongoConfigured() ? "MongoDB URI is configured; connection will be checked on first request." : "MongoDB is not configured; using local file storage.");
   });
 

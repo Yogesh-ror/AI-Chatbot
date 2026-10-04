@@ -1,8 +1,8 @@
 let STORAGE_KEY = "aster-chat-state-v1";
 const MODEL_LABELS = {
-  "gemini-3.8-flash": "Gemini 3.8 Flash",
-  "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
-  "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite",
+  "gemini-3.8-flash": "Fastest response",
+  "gemini-3.1-pro-preview": "Fastest response",
+  "gemini-3.5-flash-lite": "Fastest response",
 };
 const validThemes = new Set(["light", "dark", "system"]);
 const validStyles = new Set(["concise", "balanced", "detailed"]);
@@ -555,15 +555,18 @@ async function checkConnection() {
   try {
     const response = await fetch("/api/config", { cache: "no-store" });
     const config = await response.json();
-    connectionAvailable = Boolean(response.ok && config.geminiConfigured);
+    const configuredProviders = [config.openaiConfigured && "OpenAI", config.geminiConfigured && "Gemini"].filter(Boolean);
+    connectionAvailable = Boolean(response.ok && configuredProviders.length);
     if (connectionAvailable) {
       elements.apiLight.className = "status-light ready";
-      elements.apiTitle.textContent = "Gemini API is ready";
-      elements.apiDetail.textContent = `Aster can connect to Gemini. ${config.database?.message || ""}`;
+      elements.apiTitle.textContent = configuredProviders.length > 1 ? "Both AI providers are configured" : `${configuredProviders[0]} key is configured`;
+      elements.apiDetail.textContent = configuredProviders.length > 1
+        ? `OpenAI and Gemini run together; the first successful answer is used. ${config.database?.message || ""}`
+        : `Aster can connect to ${configuredProviders[0]}. ${config.database?.message || ""}`;
     } else {
       elements.apiLight.className = "status-light offline";
-      elements.apiTitle.textContent = "Gemini API key needed";
-      elements.apiDetail.textContent = `Add GEMINI_API_KEY to the local .env file. ${config.database?.message || ""}`;
+      elements.apiTitle.textContent = "AI API key needed";
+      elements.apiDetail.textContent = `Add OPENAI_API_KEY or GEMINI_API_KEY to the local .env file. ${config.database?.message || ""}`;
     }
     if (config.defaultModel && !state.preferences.model) state.preferences.model = config.defaultModel;
   } catch {
